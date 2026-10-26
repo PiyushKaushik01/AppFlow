@@ -1,0 +1,9 @@
+bin/
+obj/
+artifacts/
+publish/
+publish-framework-dependent/
+Releases/
+.tools/
+*.user
+*.suo

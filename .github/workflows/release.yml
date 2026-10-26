@@ -1,0 +1,45 @@
+name: Build and publish AppFlow
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish AppFlow
+        shell: pwsh
+        run: dotnet publish AppFlow.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:GitHubRepositoryUrl="https://github.com/$env:GITHUB_REPOSITORY" -o publish
+
+      - name: Install Velopack CLI
+        run: dotnet tool install vpk --tool-path .tools --version 1.2.161
+
+      - name: Download previous release for delta updates
+        shell: pwsh
+        continue-on-error: true
+        run: .\.tools\vpk.exe download github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --outputDir Releases
+
+      - name: Package installer and release files
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          .\.tools\vpk.exe pack --packId AppFlow --packVersion $version --packDir publish --mainExe AppFlow.exe --packTitle AppFlow --icon Assets\AppFlow.ico --outputDir Releases --channel win
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .\.tools\vpk.exe upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GITHUB_TOKEN --outputDir Releases --publish --releaseName "AppFlow $env:GITHUB_REF_NAME" --tag $env:GITHUB_REF_NAME
