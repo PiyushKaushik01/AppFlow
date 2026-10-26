@@ -155,7 +155,12 @@ public sealed class ProcessMonitor : IDisposable
             {
                 if (activeTriggerPaths.TryGetValue(triggerPath, out var activePid))
                 {
-                    try { using var active = Process.GetProcessById(activePid); if (!active.HasExited) return; } catch { }
+                    try
+                    {
+                        using var active = Process.GetProcessById(activePid);
+                        if (!active.HasExited && HasAppUiWindow(activePid)) return;
+                    }
+                    catch { }
                 }
                 activeTriggerPaths[triggerPath] = pid;
             }
@@ -279,7 +284,45 @@ public sealed class ProcessMonitor : IDisposable
     private static bool IsRunning(string path)
     {
         var name = System.IO.Path.GetFileNameWithoutExtension(path);
-        try { return Process.GetProcessesByName(name).Any(); } catch { return false; }
+        var targetPath = AppDiscovery.Normalize(path);
+        try
+        {
+            foreach (var process in Process.GetProcessesByName(name))
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (process.HasExited) continue;
+                        var runningPath = GetProcessPath(process.Id);
+                        if (runningPath != null && AppDiscovery.Normalize(runningPath).Equals(targetPath, StringComparison.OrdinalIgnoreCase) && HasAppUiWindow(process.Id))
+                            return true;
+                    }
+                    catch { }
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    // A tray-minimized desktop app usually retains a hidden, titled top-level window.
+    // A headless helper/service has no such window, so it must not block the app launch.
+    private static bool HasAppUiWindow(int processId)
+    {
+        var found = false;
+        EnumWindows((window, _) =>
+        {
+            GetWindowThreadProcessId(window, out var ownerProcessId);
+            if (ownerProcessId != (uint)processId) return true;
+            if (IsWindowVisible(window) || GetWindowTextLength(window) > 0)
+            {
+                found = true;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
     }
     private static string? GetProcessPath(int pid)
     {
@@ -308,6 +351,11 @@ public sealed class ProcessMonitor : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref uint size);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr handle);
+    private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll", SetLastError = true)] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextLength(IntPtr window);
     private void StopWatchers() { try { starts?.Stop(); stops?.Stop(); } catch { } starts?.Dispose(); stops?.Dispose(); starts = stops = null; }
     public void Dispose() { StopWatchers(); fallbackTimer?.Dispose(); fallbackTimer = null; }
 }

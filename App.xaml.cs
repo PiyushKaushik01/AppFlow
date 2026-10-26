@@ -15,6 +15,13 @@ public partial class App : System.Windows.Application
         var window = new MainWindow();
         MainWindow = window;
         window.Show();
+        AppInstance.ListenForActivation(() => Dispatcher.BeginInvoke(new Action(window.ActivateFromSecondLaunch)));
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        AppInstance.StopListening();
+        base.OnExit(e);
     }
 }
 

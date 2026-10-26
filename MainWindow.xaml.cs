@@ -262,6 +262,7 @@ public partial class MainWindow : Window
         Save();
     }
     private void ShowWindow() { WindowState = WindowState.Normal; Show(); Activate(); }
+    internal void ActivateFromSecondLaunch() => ShowWindow();
     private void Window_StateChanged(object? sender, EventArgs e)
     {
         if (WindowState == WindowState.Minimized && !exitRequested)
