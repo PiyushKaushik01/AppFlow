@@ -276,6 +276,18 @@ public partial class MainWindow : Window
     {
         try
         {
+            var iconResource = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Assets/AppFlow.ico"));
+            if (iconResource != null)
+            {
+                using var stream = iconResource.Stream;
+                using var embeddedIcon = new System.Drawing.Icon(stream, 32, 32);
+                return (System.Drawing.Icon)embeddedIcon.Clone();
+            }
+        }
+        catch { }
+
+        try
+        {
             var executable = Environment.ProcessPath;
             if (!string.IsNullOrWhiteSpace(executable) && System.Drawing.Icon.ExtractAssociatedIcon(executable) is { } icon) return icon;
         }

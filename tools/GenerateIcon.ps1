@@ -33,76 +33,105 @@ function New-LogoDrawing {
 function New-RenderedBitmap([int]$size) {
     $visual = [System.Windows.Media.DrawingVisual]::new()
     $context = $visual.RenderOpen()
+    $scale = $size / 512.0
+    $context.PushTransform([System.Windows.Media.ScaleTransform]::new($scale, $scale))
     $context.DrawDrawing((New-LogoDrawing))
+    $context.Pop()
     $context.Close()
     $bitmap = [System.Windows.Media.Imaging.RenderTargetBitmap]::new($size, $size, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
     $bitmap.Render($visual)
     return $bitmap
 }
 
-$logo = New-RenderedBitmap 512
-$pngEncoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
-$pngEncoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($logo))
-$pngStream = [System.IO.File]::Create((Join-Path $assetDirectory 'AppFlowLogo.png'))
-try { $pngEncoder.Save($pngStream) } finally { $pngStream.Dispose() }
-
-$sizes = @(16, 24, 32, 48, 64, 128, 256)
-$entries = [System.Collections.Generic.List[object]]::new()
-foreach ($size in $sizes) {
+function New-PngBytes([int]$size) {
     $bitmap = New-RenderedBitmap $size
-    if ($size -eq 256) {
-        $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
-        $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
-        $stream = [System.IO.MemoryStream]::new()
+    $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
+    $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+    $stream = [System.IO.MemoryStream]::new()
+    try {
         $encoder.Save($stream)
-        $bytes = $stream.ToArray()
-        $stream.Dispose()
-        $entries.Add([pscustomobject]@{ Size = $size; Data = $bytes })
-        continue
+        return ,$stream.ToArray()
     }
+    finally { $stream.Dispose() }
+}
 
+function New-DibIconFrame([int]$size) {
+    $bitmap = New-RenderedBitmap $size
+    $straightAlpha = [System.Windows.Media.Imaging.FormatConvertedBitmap]::new($bitmap, [System.Windows.Media.PixelFormats]::Bgra32, $null, 0)
     $stride = $size * 4
-    $pixels = [byte[]]::new($stride * $size)
-    $bitmap.CopyPixels($pixels, $stride, 0)
+    $sourcePixels = [byte[]]::new($stride * $size)
+    $straightAlpha.CopyPixels($sourcePixels, $stride, 0)
+    $xorPixels = [byte[]]::new($sourcePixels.Length)
     $maskStride = [int]([math]::Ceiling($size / 32.0) * 4)
-    $mask = [byte[]]::new($maskStride * $size)
+    $andMask = [byte[]]::new($maskStride * $size)
+
     for ($y = 0; $y -lt $size; $y++) {
+        $sourceRow = $y * $stride
+        $targetRow = ($size - 1 - $y) * $stride
+        [Array]::Copy($sourcePixels, $sourceRow, $xorPixels, $targetRow, $stride)
         for ($x = 0; $x -lt $size; $x++) {
-            $pixel = (($y * $size) + $x) * 4
-            if ($pixels[$pixel + 3] -eq 0) {
+            $alphaIndex = $sourceRow + ($x * 4) + 3
+            if ($sourcePixels[$alphaIndex] -eq 0) {
                 $maskIndex = (($size - 1 - $y) * $maskStride) + [int][math]::Floor($x / 8)
-                $maskIndex = [int]$maskIndex
-                if ($maskIndex -lt 0 -or $maskIndex -ge $mask.Length) { throw "Invalid icon mask index $maskIndex (size=$size, stride=$maskStride, length=$($mask.Length), x=$x, y=$y)" }
-                $mask[$maskIndex] = [byte]($mask[$maskIndex] -bor (128 -shr ($x % 8)))
+                $andMask[$maskIndex] = [byte]($andMask[$maskIndex] -bor (128 -shr ($x % 8)))
             }
         }
     }
-    $dataStream = [System.IO.MemoryStream]::new()
-    $writer = [System.IO.BinaryWriter]::new($dataStream)
-    $writer.Write([uint32]40); $writer.Write([int32]$size); $writer.Write([int32]($size * 2))
-    $writer.Write([uint16]1); $writer.Write([uint16]32); $writer.Write([uint32]0)
-    $writer.Write([uint32]($pixels.Length + $mask.Length)); $writer.Write([int32]0); $writer.Write([int32]0)
-    $writer.Write([uint32]0); $writer.Write([uint32]0)
-    for ($y = $size - 1; $y -ge 0; $y--) { $writer.Write($pixels, $y * $stride, $stride) }
-    $writer.Write($mask)
-    $writer.Flush()
-    $entries.Add([pscustomobject]@{ Size = $size; Data = $dataStream.ToArray() })
-    $writer.Dispose(); $dataStream.Dispose()
+
+    $stream = [System.IO.MemoryStream]::new()
+    $writer = [System.IO.BinaryWriter]::new($stream)
+    try {
+        $writer.Write([uint32]40)
+        $writer.Write([int32]$size)
+        $writer.Write([int32]($size * 2))
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]32)
+        $writer.Write([uint32]0)
+        $writer.Write([uint32]$xorPixels.Length)
+        $writer.Write([int32]0)
+        $writer.Write([int32]0)
+        $writer.Write([uint32]0)
+        $writer.Write([uint32]0)
+        $writer.Write([byte[]]$xorPixels)
+        $writer.Write([byte[]]$andMask)
+        $writer.Flush()
+        return ,$stream.ToArray()
+    }
+    finally {
+        $writer.Dispose()
+        $stream.Dispose()
+    }
 }
 
+$logoBytes = New-PngBytes 512
+[System.IO.File]::WriteAllBytes((Join-Path $assetDirectory 'AppFlowLogo.png'), $logoBytes)
+
+$sizes = @(16, 24, 32, 48, 64, 128, 256)
+$entries = foreach ($size in $sizes) { [pscustomobject]@{ Size = $size; Data = (New-DibIconFrame $size) } }
 $iconPath = Join-Path $assetDirectory 'AppFlow.ico'
 $iconStream = [System.IO.File]::Create($iconPath)
 $iconWriter = [System.IO.BinaryWriter]::new($iconStream)
-$iconWriter.Write([uint16]0); $iconWriter.Write([uint16]1); $iconWriter.Write([uint16]$entries.Count)
-$offset = 6 + (16 * $entries.Count)
-foreach ($entry in $entries) {
-    $dimension = if ($entry.Size -eq 256) { 0 } else { $entry.Size }
-    $iconWriter.Write([byte]$dimension); $iconWriter.Write([byte]$dimension)
-    $iconWriter.Write([byte]0); $iconWriter.Write([byte]0)
-    $iconWriter.Write([uint16]1); $iconWriter.Write([uint16]32)
-    $iconWriter.Write([uint32]$entry.Data.Length); $iconWriter.Write([uint32]$offset)
-    $offset += $entry.Data.Length
+try {
+    $iconWriter.Write([uint16]0)
+    $iconWriter.Write([uint16]1)
+    $iconWriter.Write([uint16]$entries.Count)
+    $offset = 6 + (16 * $entries.Count)
+    foreach ($entry in $entries) {
+        $dimension = if ($entry.Size -eq 256) { 0 } else { $entry.Size }
+        $iconWriter.Write([byte]$dimension)
+        $iconWriter.Write([byte]$dimension)
+        $iconWriter.Write([byte]0)
+        $iconWriter.Write([byte]0)
+        $iconWriter.Write([uint16]1)
+        $iconWriter.Write([uint16]32)
+        $iconWriter.Write([uint32]$entry.Data.Length)
+        $iconWriter.Write([uint32]$offset)
+        $offset += $entry.Data.Length
+    }
+    foreach ($entry in $entries) { $iconWriter.Write([byte[]]$entry.Data) }
 }
-foreach ($entry in $entries) { $iconWriter.Write([byte[]]$entry.Data) }
-$iconWriter.Flush(); $iconWriter.Dispose(); $iconStream.Dispose()
-Write-Output "Generated AppFlowLogo.png and AppFlow.ico in $assetDirectory"
+finally {
+    $iconWriter.Dispose()
+    $iconStream.Dispose()
+}
+Write-Output "Generated transparent PNG logo and multi-size Windows DIB AppFlow.ico in $assetDirectory"

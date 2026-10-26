@@ -29,6 +29,7 @@
 
   <ItemGroup>
     <Resource Include="Assets\AppFlowLogo.png" />
+    <Resource Include="Assets\AppFlow.ico" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(GitHubRepositoryUrl)' != ''">
